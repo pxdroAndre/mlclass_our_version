@@ -7,19 +7,20 @@ Uma ótima forma de fazer isso é utilizar o **Google Colab** ou um repositório
 ## 1. Divisão de Tarefas
 
 ### 👤 Pessoa 1: Seleção e Limpeza Básica (Foundation)
-Esta pessoa será responsável por entregar a base de dados "sem buracos".
-*   **O que faz:**
-    *   Carrega os dados e analisa os valores nulos (`NaN`) e zeros.
-    *   Toma a decisão de remover colunas inviáveis (como `Insulin` e `SkinThickness`).
-    *   Aplica a imputação (preenchimento) de nulos na `Glucose`, `BMI` e `BloodPressure` usando média ou mediana.
-*   **Status:** *Trabalho Inicial*. Não depende de ninguém.
+Esta pessoa é responsável por entregar a base de dados "sem buracos".
+*   **O que foi feito:**
+    *   Foram removidas as colunas inviáveis e com excesso de zeros: `Insulin`, `SkinThickness` e `BloodPressure`.
+    *   Foi aplicada a imputação (preenchimento) dos zeros nas colunas vitais `Glucose` e `BMI`, utilizando valores aleatórios para preservar a variância original.
+    *   O código foi refatorado utilizando uma função centralizadora `pre_processar(df)` para garantir que a mesma regra seja aplicada no treino e no teste.
+*   **Status:** ✅ **Concluído**. A base de dados limpa está pronta e acoplada no pipeline.
 
 ### 👤 Pessoa 2: Enriquecimento e Análise de Outliers (Feature Engineering)
-Esta pessoa vai focar na inteligência dos dados e lidar com valores estranhos.
-*   **O que faz:**
-    *   Procura e decide o que fazer com *outliers* (ex: pressão sanguínea muito alta ou zerada).
-    *   Cria novas colunas (Enriquecimento), como transformar a Idade (`Age`) e o `BMI` em variáveis categóricas (faixas de idade, níveis de obesidade).
-*   **Status:** *Parcialmente Paralelo*. Pode começar a analisar o CSV original em paralelo para descobrir os agrupamentos, mas a integração do seu código depende da base limpa da Pessoa 1.
+Esta pessoa vai focar na inteligência dos dados, criando novas variáveis a partir da base limpa pela Pessoa 1.
+*   **O que precisa fazer agora:**
+    *   Trabalhar escrevendo o seu código dentro do bloco `--- [PESSOA 2] ---` na função `pre_processar()` no script `diabetes_csv.py`.
+    *   Criar novas colunas (Enriquecimento). Por exemplo: transformar a Idade (`Age`) em faixas etárias categóricas (Jovem, Adulto, Idoso) ou o `BMI` em níveis de obesidade.
+    *   Avaliar se essas novas colunas melhoram o resultado do KNN e se vale a pena mantê-las.
+*   **Status:** 🚧 **Em andamento**. O código desta pessoa vai se beneficiar da arquitetura já criada e enriquecer o modelo para a Pessoa 3.
 
 ### 👤 Pessoa 3: Transformação e Pipeline Final (Integração)
 Esta pessoa é responsável por "juntar tudo", adequar os dados para o algoritmo KNN e enviar para o servidor.
