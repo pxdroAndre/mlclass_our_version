@@ -36,7 +36,36 @@ def pre_processar(df):
         df_limpo.loc[zeros_mask, col] = np.random.uniform(min_val, max_val, size=zeros_mask.sum())
         
     # --- [PESSOA 2: ENRIQUECIMENTO E OUTLIERS] ---
-    # TODO: Colega 2 vai escrever o código de enriquecimento de dados aqui
+    # Faixas fixas para que treino e teste recebam exatamente as mesmas regras.
+    df_limpo['AgeGroup'] = pd.cut(
+        df_limpo['Age'],
+        bins=[0, 25, 40, float('inf')],
+        labels=['Jovem', 'Adulto', 'Idoso'],
+        include_lowest=True
+    )
+
+    df_limpo['BMI_Category'] = pd.cut(
+        df_limpo['BMI'],
+        bins=[0, 18.5, 25, 30, float('inf')],
+        labels=['Abaixo_peso', 'Normal', 'Sobrepeso', 'Obesidade'],
+        include_lowest=True
+    )
+
+    # Indicadores clínicos simples: não removem nem alteram os registros.
+    df_limpo['HighGlucose'] = (df_limpo['Glucose'] >= 140).astype(int)
+    df_limpo['HighBMI'] = (df_limpo['BMI'] >= 30).astype(int)
+
+    # Sinaliza valores extremos pelo critério de Tukey (IQR), preservando-os
+    # para que a Pessoa 3 possa comparar o desempenho com e sem esses sinais.
+    for col in ['Glucose', 'BMI', 'Age', 'DiabetesPedigreeFunction']:
+        q1 = df_limpo[col].quantile(0.25)
+        q3 = df_limpo[col].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        df_limpo[f'{col}_Outlier'] = (
+            (df_limpo[col] < lower) | (df_limpo[col] > upper)
+        ).astype(int)
     
     # --- [PESSOA 3: TRANSFORMAÇÃO FINAL] ---
     # TODO: Colega 3 vai escrever o código de transformação (ex: escalonamento) aqui
