@@ -3,172 +3,99 @@
 """
 Atividade para trabalhar o pré-processamento dos dados.
 
-Criação de modelo preditivo para diabetes e envio para verificação de peformance
+Criação de modelo preditivo para diabetes e envio para verificação de performance
 no servidor.
 
 @author: Aydano Machado <aydano.machado@gmail.com>
+@updated_by: Equipe MachineLerdos
 """
 
 import pandas as pd
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 import requests
 
 # =====================================================================
-# PIPELINE DE PRÉ-PROCESSAMENTO
+# 1. FUNÇÃO DE LIMPEZA E TRATAMENTO DOS DADOS FALTANTES
 # =====================================================================
 def pre_processar(df):
     """
-    Função unificada que recebe um dataframe bruto, aplica a limpeza, 
-    o enriquecimento e a transformação final, e o devolve pronto para o modelo.
+    Tratamento de dados faltantes (zeros biológicos):
+    Em variáveis clínicas vitais (Glicose, Pressão e IMC), o valor 0 é
+    biologicamente impossível e representa dado ausente (Missing Value).
+    Substituímos o valor 0 por NaN para que a imputação pela mediana trate corretamente.
     """
     df_limpo = df.copy()
-    
-    # --- [PESSOA 1: LIMPEZA BÁSICA] ---
-    # Substituindo zeros (dados faltantes) em Glucose e BMI por valores aleatórios.
-    for col in ['Glucose', 'BMI']:
-        # Encontra min (ignorando zeros) e max
-        min_val = df_limpo[df_limpo[col] > 0][col].min()
-        max_val = df_limpo[col].max()
-        
-        # Mascara de zeros e substituição
-        zeros_mask = df_limpo[col] == 0
-        df_limpo.loc[zeros_mask, col] = np.random.uniform(min_val, max_val, size=zeros_mask.sum())
-        
-    # --- [PESSOA 2: ENRIQUECIMENTO E OUTLIERS] ---
-    # Faixas fixas para que treino e teste recebam exatamente as mesmas regras.
-    df_limpo['AgeGroup'] = pd.cut(
-        df_limpo['Age'],
-        bins=[0, 25, 40, float('inf')],
-        labels=['Jovem', 'Adulto', 'Idoso'],
-        include_lowest=True
-    )
-
-    df_limpo['BMI_Category'] = pd.cut(
-        df_limpo['BMI'],
-        bins=[0, 18.5, 25, 30, float('inf')],
-        labels=['Abaixo_peso', 'Normal', 'Sobrepeso', 'Obesidade'],
-        include_lowest=True
-    )
-
-    # Indicadores clínicos simples: não removem nem alteram os registros.
-    df_limpo['HighGlucose'] = (df_limpo['Glucose'] >= 140).astype(int)
-    df_limpo['HighBMI'] = (df_limpo['BMI'] >= 30).astype(int)
-
-    # Sinaliza valores extremos pelo critério de Tukey (IQR), preservando-os
-    # para que a Pessoa 3 possa comparar o desempenho com e sem esses sinais.
-    for col in ['Glucose', 'BMI', 'Age', 'DiabetesPedigreeFunction']:
-        q1 = df_limpo[col].quantile(0.25)
-        q3 = df_limpo[col].quantile(0.75)
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        df_limpo[f'{col}_Outlier'] = (
-            (df_limpo[col] < lower) | (df_limpo[col] > upper)
-        ).astype(int)
-    
+    cols_com_zeros_invalidos = ['Glucose', 'BloodPressure', 'BMI']
+    for col in cols_com_zeros_invalidos:
+        if col in df_limpo.columns:
+            df_limpo[col] = df_limpo[col].replace(0, np.nan)
+            
     return df_limpo
 
 # =====================================================================
-# FLUXO PRINCIPAL DO PROGRAMA
+# 2. SELEÇÃO DE VARIÁVEIS (FEATURE SELECTION)
 # =====================================================================
-
-# --- [PESSOA 3: DEFINIÇÃO DAS VARIÁVEIS] ---
-# Colunas numéricas 
-numeric_features = [
-    'Pregnancies', 
-    'Glucose', 
-    'BMI', 
-    'DiabetesPedigreeFunction', 
-    'Age',
-    'HighGlucose',
-    'HighBMI',
-    'Glucose_Outlier',
-    'BMI_Outlier',
-    'Age_Outlier',
-    'DiabetesPedigreeFunction_Outlier'
+# Mantemos as 6 variáveis com dados completos e alto sinal preditivo.
+# 'Insulin' (65% de dados faltantes no treino) e 'SkinThickness' (40% de dados faltantes)
+# foram removidas para evitar distorção no cálculo da distância euclidiana do k-NN.
+feature_cols = [
+    'Pregnancies',
+    'Glucose',
+    'BloodPressure',
+    'BMI',
+    'DiabetesPedigreeFunction',
+    'Age'
 ]
 
-# Colunas categóricas
-categorical_features = [
-    'AgeGroup',
-    'BMI_Category'
-]
-
-# Todas as colunas que serãao usadas  pelo modelo
-feature_cols = numeric_features + categorical_features
-
-# --- [PESSOA 3: PRÉ-PROCESSAMENTO PARA O KNN] ---
-# Define as transformações que serão aplicadas aos dados:
-# StandardScaler nas variáveis numéricas
-# OneHotEncoder nas variáveis categóricas
-numeric_transformer = Pipeline(
+# =====================================================================
+# 3. PIPELINE DE PRÉ-PROCESSAMENTO E MODELAGEM
+# =====================================================================
+# 1) Imputação: SimpleImputer com a mediana (robusta contra valores atípicos)
+# 2) Normalização: MinMaxScaler colocando as 6 features no intervalo [0, 1]
+# 3) Classificador: k-NN com k=3 (100% fixo conforme a regra do professor)
+neigh = Pipeline(
     steps=[
         ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
+        ('scaler', MinMaxScaler()),
+        ('classifier', KNeighborsClassifier(n_neighbors=3))
     ]
 )
 
-categorical_transformer = Pipeline(
-    steps=[
-        ('imputer', SimpleImputer(strategy='most_frequent')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore'))
-    ]
-)
-
-preprocessor = ColumnTransformer(
-    transformers=[
-        ('num', numeric_transformer, numeric_features),
-        ('cat', categorical_transformer, categorical_features)
-    ]
-)
-
+# =====================================================================
+# 4. TREINAMENTO DO MODELO
+# =====================================================================
 print('\n - Lendo e processando dados de TREINO')
 data = pd.read_csv('diabetes_dataset.csv')
 data_tratado = pre_processar(data)
 
-# Criando X and y para o algoritmo de aprendizagem
 X = data_tratado[feature_cols]
 y = data_tratado.Outcome
 
-# --- [PESSOA 3: PIPELINE E MODELO KNN] ---
-# Criando o modelo preditivo para a base trabalhada
-print(' - Criando modelo preditivo')
-neigh = Pipeline(
-    steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', KNeighborsClassifier(n_neighbors=3))
-    ]
-)
+print(' - Treinando o Pipeline (Pré-processamento + k-NN k=3)')
 neigh.fit(X, y)
 
-# Realizando previsões com o arquivo de teste
-print(' - Aplicando modelo e enviando para o servidor')
+# =====================================================================
+# 5. PREVISÃO E SUBMISSÃO AO SERVIDOR
+# =====================================================================
+print(' - Lendo arquivo de teste cego e aplicando transformações')
 data_app = pd.read_csv('diabetes_app.csv')
-
-# Aplicando a mesma função de limpeza no arquivo cego de teste
 data_app_tratado = pre_processar(data_app)
 data_app_final = data_app_tratado[feature_cols]
 
 y_pred = neigh.predict(data_app_final)
 
-# Enviando previsões realizadas com o modelo para o servidor
+print(' - Enviando previsões para o servidor...')
 URL = "https://aydanomachado.com/mlclass/01_Preprocessing.php"
-
-#TODO Substituir pela sua chave aqui
 DEV_KEY = "MachineLerdos"
 
-# json para ser enviado para o servidor
-data_json = {'dev_key':DEV_KEY,
-             'predictions':pd.Series(y_pred).to_json(orient='values')}
+data_json = {
+    'dev_key': DEV_KEY,
+    'predictions': pd.Series(y_pred).to_json(orient='values')
+}
 
-# Enviando requisição e salvando o objeto resposta
-r = requests.post(url = URL, data = data_json)
-
-# Extraindo e imprimindo o texto da resposta
-pastebin_url = r.text
+r = requests.post(url=URL, data=data_json)
 print(" - Resposta do servidor:\n", r.text, "\n")
