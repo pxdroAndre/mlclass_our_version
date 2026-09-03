@@ -13,9 +13,10 @@ no servidor.
 import pandas as pd
 import numpy as np
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import KNNImputer
 from sklearn.pipeline import Pipeline
+from sklearn.model_selection import cross_val_score
 import requests
 
 # =====================================================================
@@ -24,12 +25,13 @@ import requests
 def pre_processar(df):
     """
     Tratamento de dados faltantes (zeros biológicos):
-    Em variáveis clínicas vitais (Glicose, Pressão e IMC), o valor 0 é
-    biologicamente impossível e representa dado ausente (Missing Value).
-    Substituímos o valor 0 por NaN para que a imputação pela mediana trate corretamente.
+    Em variáveis clínicas vitais (Glicose, Pressão, IMC e Insulina), o valor 0 é
+    biologicamente impossível/inválido e representa dado ausente (Missing Value).
+    Substituímos o valor 0 por NaN para que a imputação multivariada via KNNImputer
+    possa estimar esses valores com base na similaridade entre os pacientes.
     """
     df_limpo = df.copy()
-    cols_com_zeros_invalidos = ['Glucose', 'BloodPressure', 'BMI']
+    cols_com_zeros_invalidos = ['Glucose', 'BloodPressure', 'BMI', 'Insulin']
     for col in cols_com_zeros_invalidos:
         if col in df_limpo.columns:
             df_limpo[col] = df_limpo[col].replace(0, np.nan)
@@ -39,13 +41,17 @@ def pre_processar(df):
 # =====================================================================
 # 2. SELEÇÃO DE VARIÁVEIS (FEATURE SELECTION)
 # =====================================================================
-# Mantemos as 6 variáveis com dados completos e alto sinal preditivo.
-# 'Insulin' (65% de dados faltantes no treino) e 'SkinThickness' (40% de dados faltantes)
-# foram removidas para evitar distorção no cálculo da distância euclidiana do k-NN.
+# Mantemos 7 variáveis para o modelo:
+# - 'Insulin' é mantida pelo seu forte sinal biológico e correlação clínica direta
+#   com o diabetes, além de estar 100% preenchida no teste do servidor; os dados faltantes
+#   no treino são estimados de forma inteligente pelo KNNImputer.
+# - 'SkinThickness' permanece excluída por apresentar alta redundância com o BMI (IMC)
+#   e elevado ruído na base.
 feature_cols = [
     'Pregnancies',
     'Glucose',
     'BloodPressure',
+    'Insulin',
     'BMI',
     'DiabetesPedigreeFunction',
     'Age'
@@ -54,20 +60,24 @@ feature_cols = [
 # =====================================================================
 # 3. PIPELINE DE PRÉ-PROCESSAMENTO E MODELAGEM
 # =====================================================================
-# 1) Imputação: SimpleImputer com a mediana (robusta contra valores atípicos)
-# 2) Normalização: MinMaxScaler colocando as 6 features no intervalo [0, 1]
+# 1) Imputação: KNNImputer (estima valores faltantes considerando a vizinhança multidimensional)
+# 2) Padronização: StandardScaler (coloca as features em escala z com média 0 e desvio padrão 1,
+#    mais robusta a outliers que o MinMaxScaler para algoritmos baseados em distância)
 # 3) Classificador: k-NN com k=3 (100% fixo conforme a regra do professor)
 neigh = Pipeline(
     steps=[
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', MinMaxScaler()),
+        ('imputer', KNNImputer(n_neighbors=5)),
+        ('scaler', StandardScaler()),
         ('classifier', KNeighborsClassifier(n_neighbors=3))
     ]
 )
 
 # =====================================================================
-# 4. TREINAMENTO DO MODELO
+# 4. CONFIGURAÇÃO E AVALIAÇÃO LOCAL (CROSS-VALIDATION)
 # =====================================================================
+# Defina como True apenas quando quiser submeter as previsões ao servidor
+ENVIAR_AO_SERVIDOR = True
+
 print('\n - Lendo e processando dados de TREINO')
 data = pd.read_csv('diabetes_dataset.csv')
 data_tratado = pre_processar(data)
@@ -75,27 +85,36 @@ data_tratado = pre_processar(data)
 X = data_tratado[feature_cols]
 y = data_tratado.Outcome
 
-print(' - Treinando o Pipeline (Pré-processamento + k-NN k=3)')
-neigh.fit(X, y)
+print(' - Avaliando modelo localmente via Validação Cruzada (20 folds)...')
+cv_scores = cross_val_score(neigh, X, y, cv=20, scoring='accuracy')
+print(f'   Scores por fold: {np.round(cv_scores, 4)}')
+print(f'   Acurácia média:  {cv_scores.mean() * 100:.2f}% (± {cv_scores.std() * 100:.2f}%)')
 
 # =====================================================================
 # 5. PREVISÃO E SUBMISSÃO AO SERVIDOR
 # =====================================================================
-print(' - Lendo arquivo de teste cego e aplicando transformações')
-data_app = pd.read_csv('diabetes_app.csv')
-data_app_tratado = pre_processar(data_app)
-data_app_final = data_app_tratado[feature_cols]
+if ENVIAR_AO_SERVIDOR:
+    print('\n - Treinando o Pipeline com toda a base de treino...')
+    neigh.fit(X, y)
 
-y_pred = neigh.predict(data_app_final)
+    print(' - Lendo arquivo de teste cego e aplicando transformações')
+    data_app = pd.read_csv('diabetes_app.csv')
+    data_app_tratado = pre_processar(data_app)
+    data_app_final = data_app_tratado[feature_cols]
 
-print(' - Enviando previsões para o servidor...')
-URL = "https://aydanomachado.com/mlclass/01_Preprocessing.php"
-DEV_KEY = "MachineLerdos"
+    y_pred = neigh.predict(data_app_final)
 
-data_json = {
-    'dev_key': DEV_KEY,
-    'predictions': pd.Series(y_pred).to_json(orient='values')
-}
+    print(' - Enviando previsões para o servidor...')
+    URL = "https://aydanomachado.com/mlclass/01_Preprocessing.php"
+    DEV_KEY = "MachineLerdos"
 
-r = requests.post(url=URL, data=data_json)
-print(" - Resposta do servidor:\n", r.text, "\n")
+    data_json = {
+        'dev_key': DEV_KEY,
+        'predictions': pd.Series(y_pred).to_json(orient='values')
+    }
+
+    r = requests.post(url=URL, data=data_json)
+    print(" - Resposta do servidor:\n", r.text, "\n")
+else:
+    print('\n [INFO] Modo local: Envio desativado (ENVIAR_AO_SERVIDOR = False).')
+    print('        Para enviar ao servidor, altere ENVIAR_AO_SERVIDOR = True no script.\n')
